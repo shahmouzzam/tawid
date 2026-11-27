@@ -1,0 +1,64 @@
+/* Local stand-in for two Open Payments providers, used only to dry-run
+   tawid-testwallet.mjs offline. Bodies come from the SDK's own mock helpers,
+   and the SDK validates every reply against the official OpenAPI files.
+   It does not check request signatures. FAULT env: none | no_route | declined | failed | mismatch */
+import http from 'node:http'
+import { mockWalletAddress, mockIncomingPaymentWithPaymentMethods, mockIncomingPayment, mockQuote, mockOutgoingPayment, mockPendingGrant, mockGrant } from '@interledger/open-payments'
+
+const PORT = 4010, BASE = `http://localhost:${PORT}`, FAULT = process.env.FAULT || 'none'
+const assets = { sam: 'AUD', liza: 'PHP' }
+const db = { incoming: {}, quotes: {}, outgoing: {}, polls: 0 }
+const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(body ? JSON.stringify(body) : '') }
+const id = () => Math.random().toString(16).slice(2, 10)
+
+http.createServer(async (req, res) => {
+  let raw = ''; for await (const c of req) raw += c
+  const body = raw ? JSON.parse(raw) : {}
+  const path = new URL(req.url, BASE).pathname.replace(/\/$/, '')
+  const seg = path.split('/').filter(Boolean)
+  if (req.method === 'GET' && seg.length === 1 && assets[seg[0]])
+    return send(res, 200, mockWalletAddress({ id: `${BASE}/${seg[0]}`, publicName: seg[0], assetCode: assets[seg[0]], assetScale: 2, authServer: `${BASE}/auth`, resourceServer: BASE }))
+  if (seg.length === 1 && !['auth', 'incoming-payments', 'quotes', 'outgoing-payments'].includes(seg[0])) return send(res, 404, { error: { code: 'not_found', description: 'wallet address not found' } })
+
+  if (seg[0] === 'auth' && seg.length === 1 && req.method === 'POST') {
+    const access = body.access_token.access
+    if (access.some(a => a.type === 'outgoing-payment'))
+      return send(res, 200, mockPendingGrant({ interact: { redirect: `${BASE}/auth/interact/${id()}`, finish: id() }, continue: { access_token: { value: 'cont_' + id() }, uri: `${BASE}/auth/continue/${id()}`, wait: 1 } }))
+    return send(res, 200, mockGrant({ access_token: { value: 'tok_' + id(), manage: `${BASE}/auth/token/${id()}`, expires_in: 600, access }, continue: { access_token: { value: 'cont_' + id() }, uri: `${BASE}/auth/continue/${id()}` } }))
+  }
+  if (seg[0] === 'auth' && seg[1] === 'continue' && req.method === 'POST') {
+    if (FAULT === 'declined') return send(res, 401, { error: { code: 'request_denied', description: 'the user declined' } })
+    return send(res, 200, mockGrant({ access_token: { value: 'tok_' + id(), manage: `${BASE}/auth/token/${id()}`, expires_in: 600, access: [{ type: 'outgoing-payment', actions: ['create', 'read'], identifier: `${BASE}/sam` }] }, continue: { access_token: { value: 'cont_' + id() }, uri: `${BASE}/auth/continue/${id()}` } }))
+  }
+  if (seg[0] === 'incoming-payments') {
+    if (req.method === 'POST' && seg.length === 1) {
+      const ip = mockIncomingPaymentWithPaymentMethods({ id: `${BASE}/incoming-payments/${id()}`, walletAddress: body.walletAddress, incomingAmount: undefined, receivedAmount: { value: '0', assetCode: 'PHP', assetScale: 2 }, completed: false, expiresAt: body.expiresAt, metadata: body.metadata })
+      delete ip.incomingAmount; db.incoming[ip.id] = ip; return send(res, 201, ip)
+    }
+    const ip = db.incoming[`${BASE}/incoming-payments/${seg[1]}`]
+    if (!ip) return send(res, 404, { error: { code: 'not_found', description: 'no such incoming payment' } })
+    if (seg[2] === 'complete') { ip.completed = true; const { methods, ...v } = ip; return send(res, 200, v) }
+    return send(res, 200, ip)
+  }
+  if (seg[0] === 'quotes' && req.method === 'POST') {
+    if (FAULT === 'no_route') return send(res, 400, { error: { code: 'invalid_request', description: 'no rate available for this receiver' } })
+    const debit = Number(body.debitAmount.value), receive = Math.round(debit * 0.98 * 43.5)
+    const q = mockQuote({ id: `${BASE}/quotes/${id()}`, walletAddress: body.walletAddress, receiver: body.receiver, method: 'ilp', debitAmount: body.debitAmount, receiveAmount: { value: String(receive), assetCode: 'PHP', assetScale: 2 }, expiresAt: new Date(Date.now() + 60000).toISOString() })
+    db.quotes[q.id] = q; return send(res, 201, q)
+  }
+  if (seg[0] === 'outgoing-payments') {
+    if (req.method === 'POST') {
+      const q = db.quotes[body.quoteId]
+      const op = mockOutgoingPayment({ id: `${BASE}/outgoing-payments/${id()}`, walletAddress: body.walletAddress, quoteId: q.id, receiver: q.receiver, debitAmount: q.debitAmount, receiveAmount: q.receiveAmount, sentAmount: { ...q.debitAmount, value: '0' }, failed: false, metadata: body.metadata })
+      db.outgoing[op.id] = op; return send(res, 201, op)
+    }
+    const op = db.outgoing[`${BASE}/outgoing-payments/${seg[1]}`]
+    if (!op) return send(res, 404, { error: { code: 'not_found', description: 'no such outgoing payment' } })
+    if (++db.polls >= 2) {
+      if (FAULT === 'failed') op.failed = true
+      else { op.sentAmount = op.debitAmount; const ip = db.incoming[op.receiver]; ip.receivedAmount = FAULT === 'mismatch' ? { ...op.receiveAmount, value: String(Number(op.receiveAmount.value) - 100) } : op.receiveAmount }
+    }
+    return send(res, 200, op)
+  }
+  send(res, 404, { error: { code: 'not_found', description: 'unknown route' } })
+}).listen(PORT, () => console.log('mock providers on ' + BASE + ' fault=' + FAULT))

@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+/* ============================================================
+   Tawid on the Interledger test network: CHECK -> PAY -> TRACK
+
+   Runs one payment between two Open Payments wallet addresses
+   with the official SDK (@interledger/open-payments).
+   Use TEST wallets and TEST money only.
+
+   Setup (once), at https://wallet.interledger-test.dev :
+     1. Create an account and finish the sign-up steps.
+     2. Make two accounts with "New account" (one payer, one seller). Deposit
+        test money into the payer. Give each one a wallet address with
+        "Add wallet address".
+     3. Settings > Developer Keys > open the PAYER account >
+        "Generate public & private key". A file called private.key downloads.
+        Put it next to this file. Copy the key ID shown on screen.
+     4. npm install @interledger/open-payments
+     5. Set the values below as environment variables, then run:
+          node tawid-testwallet.mjs
+        The script prints a link. Open it, approve as the payer, come back
+        and press Enter.
+
+   Environment variables:
+     TAWID_PAYER_WALLET    payer wallet address   e.g. https://ilp.interledger-test.dev/sam-test
+     TAWID_SELLER_WALLET   seller wallet address  e.g. https://ilp.interledger-test.dev/liza-test
+     TAWID_KEY_ID          key ID from the developer keys page
+     TAWID_PRIVATE_KEY     path to the private key file (default ./private.key)
+     TAWID_CLIENT_WALLET   wallet address the key belongs to (default: the payer wallet)
+     TAWID_AMOUNT          amount the payer sends, in normal units (default 20.00)
+   ============================================================ */
+import { createAuthenticatedClient, isPendingGrant, isFinalizedGrantWithAccessToken, OpenPaymentsClientError } from '@interledger/open-payments'
+import { createInterface } from 'node:readline/promises'
+import { writeFileSync } from 'node:fs'
+
+const env = process.env
+const url = v => (v || '').trim().replace(/^\$/, 'https://')
+const cfg = {
+  payer: url(env.TAWID_PAYER_WALLET),
+  seller: url(env.TAWID_SELLER_WALLET),
+  keyId: env.TAWID_KEY_ID,
+  privateKey: env.TAWID_PRIVATE_KEY || 'private.key',
+  client: url(env.TAWID_CLIENT_WALLET) || url(env.TAWID_PAYER_WALLET),
+  amount: env.TAWID_AMOUNT || '20.00',
+  useHttp: env.TAWID_USE_HTTP === '1',            // local mock testing only
+  autoApprove: env.TAWID_AUTO_APPROVE === '1'     // local mock testing only
+}
+for (const k of ['payer', 'seller', 'keyId']) {
+  if (!cfg[k]) { console.error(`Missing setting: ${k}. See the notes at the top of this file.`); process.exit(2) }
+}
+
+/* ---------- The failure dictionary: signal -> plain words, who must act, where the money is ---------- */
+const FAILURES = {
+  wallet_not_found:   { plain: 'That wallet address does not exist, or its provider does not support Open Payments.', owner: 'The person who gave the address', money: 'No money moved.' },
+  no_route:           { plain: 'The payer’s provider could not give a price for this seller. There may be no route or no exchange rate.', owner: 'The payer’s provider', money: 'No money moved.' },
+  consent_declined:   { plain: 'The payer did not approve the payment.', owner: 'Nobody. The payer chose this.', money: 'No money moved.' },
+  quote_expired:      { plain: 'The price expired before the payment was created.', owner: 'The checkout: get a new price', money: 'No money moved.' },
+  insufficient_funds: { plain: 'The paying account does not have enough money.', owner: 'The payer', money: 'No money moved.' },
+  delivery_failed:    { plain: 'The payer’s provider could not deliver the payment to the seller’s provider.', owner: 'The payer’s provider must refund what was not delivered', money: 'Undelivered money must go back to the payer.' },
+  amount_mismatch:    { plain: 'The amount that arrived is different from the price that was shown.', owner: 'The payer’s provider', money: 'Part delivered. The difference must be explained or returned.' },
+  timeout:            { plain: 'The payment did not finish in the time we waited.', owner: 'The payer’s provider must report the final state', money: 'Unknown until the provider reports.' },
+  unknown:            { plain: 'The payment could not be completed.', owner: 'The provider that returned the error', money: 'Check the tracking record.' }
+}
+class TawidFailure extends Error {
+  constructor(code, cause) { super(code); this.code = code; this.cause = cause }
+}
+const describe = e => e instanceof OpenPaymentsClientError
+  ? { message: e.message, description: e.description, status: e.status, code: e.code }
+  : { message: String(e && e.message || e) }
+/** Runs one step. If it throws, tag the error with our failure code for that step. */
+async function step(failureCode, fn) {
+  try { return await fn() } catch (e) {
+    if (e instanceof TawidFailure) throw e
+    throw new TawidFailure(typeof failureCode === 'function' ? failureCode(e) : failureCode, describe(e))
+  }
+}
+
+/* ---------- Tracking record: every state with the time it was reached ---------- */
+const t0 = Date.now()
+const record = { reference: 'tawid_' + t0.toString(36), startedAt: new Date(t0).toISOString(), states: [], outcome: null }
+const mark = (state, detail = {}) => {
+  const ms = Date.now() - t0
+  record.states.push({ state, ms, ...detail })
+  console.log(`  [${String(ms).padStart(6)} ms] ${state}${detail.note ? ' — ' + detail.note : ''}`)
+}
+const show = a => `${a.assetCode} ${(Number(a.value) / 10 ** a.assetScale).toFixed(a.assetScale)}`
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+async function main() {
+  const client = await createAuthenticatedClient({ walletAddressUrl: cfg.client, keyId: cfg.keyId, privateKey: cfg.privateKey, useHttp: cfg.useHttp })
+
+  /* ================= CHECK: can this payment get through, and at what price? ================= */
+  console.log('\nCHECK')
+  const seller = await step('wallet_not_found', () => client.walletAddress.get({ url: cfg.seller }))
+  const payer = await step('wallet_not_found', () => client.walletAddress.get({ url: cfg.payer }))
+  mark('accounts_found', { note: `${payer.assetCode} -> ${seller.assetCode}` })
+
+  const inGrant = await step('no_route', () => client.grant.request({ url: seller.authServer },
+    { access_token: { access: [{ type: 'incoming-payment', actions: ['create', 'read', 'complete'] }] } }))
+  if (!isFinalizedGrantWithAccessToken(inGrant)) throw new TawidFailure('no_route', { message: 'incoming-payment grant was not issued' })
+  const incoming = await step('no_route', () => client.incomingPayment.create(
+    { url: seller.resourceServer, accessToken: inGrant.access_token.value },
+    { walletAddress: seller.id, expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), metadata: { description: 'Tawid test payment', tawidReference: record.reference } }))
+  mark('requested', { incomingPayment: incoming.id })
+
+  const quoteGrant = await step('no_route', () => client.grant.request({ url: payer.authServer },
+    { access_token: { access: [{ type: 'quote', actions: ['create', 'read'] }] } }))
+  if (!isFinalizedGrantWithAccessToken(quoteGrant)) throw new TawidFailure('no_route', { message: 'quote grant was not issued' })
+  const debitValue = String(Math.round(Number(cfg.amount) * 10 ** payer.assetScale))
+  const quote = await step('no_route', () => client.quote.create(
+    { url: payer.resourceServer, accessToken: quoteGrant.access_token.value },
+    { walletAddress: payer.id, receiver: incoming.id, method: 'ilp', debitAmount: { value: debitValue, assetCode: payer.assetCode, assetScale: payer.assetScale } }))
+  mark('price_fixed', { note: `payer pays ${show(quote.debitAmount)}, seller gets ${show(quote.receiveAmount)}`, quote: quote.id, expiresAt: quote.expiresAt })
+  record.price = { debitAmount: quote.debitAmount, receiveAmount: quote.receiveAmount, expiresAt: quote.expiresAt }
+
+  /* ================= PAY: the payer approves at their own provider ================= */
+  console.log('\nPAY')
+  const pending = await step('unknown', () => client.grant.request({ url: payer.authServer }, {
+    access_token: { access: [{ type: 'outgoing-payment', actions: ['create', 'read'], identifier: payer.id, limits: { receiver: incoming.id, debitAmount: quote.debitAmount } }] },
+    interact: { start: ['redirect'] }
+  }))
+  if (!isPendingGrant(pending)) throw new TawidFailure('unknown', { message: 'expected an interactive grant' })
+  console.log('\n  Open this link, sign in as the PAYER and approve:\n  ' + pending.interact.redirect + '\n')
+  if (!cfg.autoApprove) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    await rl.question('  Press Enter here after you approve (or decline) in the browser... ')
+    rl.close()
+  }
+  let grant = null
+  for (let i = 0; i < 5 && !grant; i++) {
+    const g = await step('consent_declined', () => client.grant.continue({ url: pending.continue.uri, accessToken: pending.continue.access_token.value }))
+    if (isFinalizedGrantWithAccessToken(g)) grant = g; else await sleep(((g.continue && g.continue.wait) || 2) * 1000)
+  }
+  if (!grant) throw new TawidFailure('consent_declined', { message: 'grant was not finalised' })
+  mark('approved')
+
+  if (quote.expiresAt && Date.now() > Date.parse(quote.expiresAt)) throw new TawidFailure('quote_expired')
+  const outgoing = await step(e => /insufficient|funds|balance/i.test(JSON.stringify(describe(e))) ? 'insufficient_funds' : /expire/i.test(JSON.stringify(describe(e))) ? 'quote_expired' : 'unknown',
+    () => client.outgoingPayment.create(
+      { url: payer.resourceServer, accessToken: grant.access_token.value },
+      { walletAddress: payer.id, quoteId: quote.id, metadata: { tawidReference: record.reference } }))
+  mark('instruction_created', { outgoingPayment: outgoing.id })
+
+  /* ================= TRACK: follow the money until the seller can use it ================= */
+  console.log('\nTRACK')
+  let op = outgoing
+  const deadline = Date.now() + 60000
+  while (!op.failed && BigInt(op.sentAmount.value) < BigInt(op.debitAmount.value)) {
+    if (Date.now() > deadline) throw new TawidFailure('timeout', { sentAmount: op.sentAmount })
+    await sleep(1000)
+    op = await step('timeout', () => client.outgoingPayment.get({ url: outgoing.id, accessToken: grant.access_token.value }))
+  }
+  if (op.failed) throw new TawidFailure('delivery_failed', { sentAmount: op.sentAmount })
+  mark('sent', { note: `provider reports ${show(op.sentAmount)} sent` })
+
+  await step('unknown', () => client.incomingPayment.complete({ url: incoming.id, accessToken: inGrant.access_token.value }))
+  const landed = await step('unknown', () => client.incomingPayment.get({ url: incoming.id, accessToken: inGrant.access_token.value }))
+  record.received = landed.receivedAmount
+  if (BigInt(landed.receivedAmount.value) !== BigInt(quote.receiveAmount.value)) throw new TawidFailure('amount_mismatch', { received: landed.receivedAmount, quoted: quote.receiveAmount })
+  mark('received_by_seller', { note: `seller’s provider reports ${show(landed.receivedAmount)} received, payment closed` })
+  record.outcome = { result: 'paid', msFromApprovalToReceived: record.states.at(-1).ms - record.states.find(s => s.state === 'approved').ms }
+  console.log(`\nPAID. Reference ${record.reference}. From approval to received: ${record.outcome.msFromApprovalToReceived} ms.`)
+}
+
+main().catch(e => {
+  const code = e instanceof TawidFailure && FAILURES[e.code] ? e.code : 'unknown'
+  const f = FAILURES[code]
+  record.outcome = { result: 'failed', code, ...f, detail: e instanceof TawidFailure ? e.cause : describe(e) }
+  console.log(`\nCOULD NOT GET THROUGH (${code})\n  What happened: ${f.plain}\n  Who must act:  ${f.owner}\n  The money:     ${f.money}`)
+  process.exitCode = 1
+}).finally(() => {
+  const file = `tawid-run-${record.reference}.json`
+  writeFileSync(file, JSON.stringify(record, null, 2))
+  console.log(`Tracking record saved to ${file}\n`)
+})

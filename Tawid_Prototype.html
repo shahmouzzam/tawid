@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tawid — check it, pay it, track it (simulated proof of concept)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400..700&family=Inter:wght@400;600&display=swap">
+<style>
+:root { --ink:#10243A; --paper:#F7F5EF; --card:#FFFDF8; --line:#DDD6C6; --soft:#46566A; --teal:#0B5453; --tealbg:#D5E7E4; --orange:#A8470F; --orangebg:#F6DAC8; --violet:#3B2F7A; --violetbg:#E2DFF1; --red:#8C1D18; --redbg:#F6D9D6; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:'Inter', Arial, sans-serif; font-size:16px; line-height:1.45; }
+h1, h2, h3 { font-family:'Space Grotesk', Arial, sans-serif; margin:0; line-height:1.15; }
+.banner { background:var(--ink); color:var(--paper); padding:10px 20px; font-size:14px; font-weight:600; text-align:center; }
+header { padding:24px 24px 8px; max-width:1280px; margin:0 auto; }
+header h1 { font-size:32px; }
+header p { margin:8px 0 0; color:var(--soft); max-width:820px; }
+.controls { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:end; padding:16px 24px; max-width:1280px; margin:0 auto; }
+.controls label { display:flex; flex-direction:column; gap:4px; font-size:13px; font-weight:600; color:var(--soft); }
+select, input[type=number], input[type=text] { font:inherit; padding:8px 10px; border:2px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); min-width:0; }
+button { font:inherit; font-weight:600; padding:10px 16px; border-radius:8px; border:2px solid var(--ink); background:var(--ink); color:var(--paper); cursor:pointer; }
+button.ghost { background:transparent; color:var(--ink); }
+button.warn { background:transparent; color:var(--red); border-color:var(--red); }
+button:disabled { opacity:.45; cursor:not-allowed; }
+button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline:3px solid var(--orange); outline-offset:2px; }
+main { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,7fr); gap:24px; padding:8px 24px 40px; max-width:1280px; margin:0 auto; }
+@media (max-width:900px) { main { grid-template-columns:minmax(0,1fr); } }
+.panel { background:var(--card); border:2px solid var(--line); border-radius:14px; padding:18px 20px; margin-bottom:20px; }
+.panel h2 { font-size:20px; margin-bottom:4px; }
+.who { font-size:13px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--orange); margin:0 0 6px; }
+.muted { color:var(--soft); font-size:14px; margin:6px 0; }
+.amount { font-family:'Space Grotesk', Arial, sans-serif; font-size:30px; font-weight:600; margin:2px 0; }
+.kv { display:grid; grid-template-columns:auto auto; justify-content:space-between; gap:6px 16px; margin:12px 0; font-size:15px; }
+.kv dt { color:var(--soft); } .kv dd { margin:0; font-weight:600; text-align:right; overflow-wrap:anywhere; }
+.btnrow { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+.consent { border:2px dashed var(--ink); border-radius:12px; padding:14px 16px; background:#fff; }
+.pill { display:inline-block; font-size:13px; font-weight:600; padding:2px 10px; border-radius:999px; background:var(--line); color:var(--soft); }
+.pill.on { background:var(--tealbg); color:var(--teal); }
+.pill.bad { background:var(--redbg); color:var(--red); }
+.status { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 0; padding:0; list-style:none; }
+.result.ok { border-color:var(--teal); } .result.bad { border-color:var(--red); }
+.log { list-style:none; margin:0; padding:0; }
+.log li { border-top:1px solid var(--line); padding:8px 0; font-size:14px; }
+.log li.phase { border-top:2px solid var(--ink); font-family:'Space Grotesk', Arial, sans-serif; font-weight:600; font-size:15px; padding-top:12px; }
+.log summary { cursor:pointer; display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
+.tag { font-size:12px; font-weight:600; padding:1px 8px; border-radius:6px; white-space:nowrap; }
+.tag.op { background:var(--tealbg); color:var(--teal); } .tag.auth { background:var(--violetbg); color:var(--violet); } .tag.ilp { background:var(--orangebg); color:var(--orange); } .tag.err { background:var(--redbg); color:var(--red); }
+.mono { font-family:ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size:13px; overflow-wrap:anywhere; }
+pre { margin:8px 0 0; padding:10px 12px; background:#F0ECE1; border-radius:8px; overflow-x:auto; font-size:12.5px; line-height:1.4; }
+.empty { color:var(--soft); font-size:14px; }
+.notes li { margin:4px 0; }
+.steps { display:flex; gap:8px; margin:0 0 14px; padding:0; list-style:none; }
+.steps li { flex:1; text-align:center; font-family:'Space Grotesk', Arial, sans-serif; font-weight:600; font-size:14px; padding:6px 4px; border-radius:8px; background:var(--line); color:var(--soft); }
+.steps li.now { background:var(--ink); color:var(--paper); }
+.steps li.done { background:var(--tealbg); color:var(--teal); }
+.fail { margin:12px 0 0; padding:0; }
+.fail dt { font-size:13px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--red); margin-top:10px; }
+.fail dd { margin:2px 0 0; }
+.track { list-style:none; margin:10px 0 0; padding:0; }
+.track li { display:grid; grid-template-columns:86px 1fr; gap:10px; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
+.track .ms { font-family:ui-monospace, Menlo, Consolas, monospace; font-size:13px; color:var(--soft); }
+.track li.bad b { color:var(--red); }
+table.dict { width:100%; border-collapse:collapse; font-size:13.5px; }
+table.dict th { text-align:left; padding:6px 8px; border-bottom:2px solid var(--ink); }
+table.dict td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+table.dict tr.hit td { background:var(--redbg); }
+.wide { max-width:1280px; margin:0 auto; padding:0 24px 40px; }
+.scroll { overflow-x:auto; }
+[hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div class="banner" role="note">SIMULATION ONLY · mocked providers · test values · no real money · this page makes no network requests to any payment service</div>
+<header>
+  <h1>Tawid — check it, pay it, track it</h1>
+  <p>Simulated proof of concept. A customer in Australia pays a freelancer in the Philippines through one pay link. Tawid first <b>checks</b> that the payment can get through and fixes the price, then the customer <b>pays</b> at their own provider, then both sides <b>track</b> the same record. If it fails, Tawid says what happened, who must act and where the money is. People and providers shown here are made up.</p>
+</header>
+
+<section class="controls" aria-label="Test controls">
+  <label>Amount (AUD)
+    <input id="amount" type="number" min="1" max="100" step="0.01" value="20.00">
+  </label>
+  <label>Fault to inject
+    <select id="fault">
+      <option value="none">None (normal payment)</option>
+      <option value="unsupported">Sam’s provider has no Open Payments</option>
+      <option value="noroute">No route from Provider A to Provider B</option>
+      <option value="expiry">Price expires after 3 seconds</option>
+      <option value="funds">Payer has too little money</option>
+      <option value="liquidity">Provider B has no pesos ready</option>
+      <option value="shortpay">Provider B pays out less than the price</option>
+    </select>
+  </label>
+  <button id="reset" class="ghost" type="button">Reset</button>
+</section>
+
+<main>
+  <div>
+    <section class="panel" aria-live="polite">
+      <p class="who">Sam’s phone · customer · Provider A (Australia)</p>
+      <ol class="steps" aria-label="Stage"><li id="stp-check" class="now">1 Check</li><li id="stp-pay">2 Pay</li><li id="stp-track">3 Track</li></ol>
+      <div id="s-invoice">
+        <h2>Pay Liza</h2>
+        <p class="muted">Menu design · pay link <span class="mono">https://provider-b.example/liza</span></p>
+        <p class="amount" id="inv-amount">AUD 20.00</p>
+        <label class="muted" for="payer">Your wallet address</label><br>
+        <input id="payer" type="text" value="https://provider-a.example/sam" style="width:100%">
+        <div class="btnrow"><button id="get-price" type="button">Check and get price</button></div>
+      </div>
+      <div id="s-quote" hidden>
+        <h2>It can get through</h2>
+        <p class="muted">Both providers answered and the price is fixed. Nothing has been paid yet.</p>
+        <dl class="kv">
+          <dt>You pay</dt><dd id="q-debit"></dd>
+          <dt>Liza gets</dt><dd id="q-receive"></dd>
+          <dt>Total cost</dt><dd id="q-cost"></dd>
+          <dt>Price valid for</dt><dd id="q-ttl"></dd>
+        </dl>
+        <p class="muted">Total cost is measured against a reference rate of AUD 1 = PHP 43.50 (assumed).</p>
+        <div class="btnrow"><button id="go-approve" type="button">Continue to Provider A</button><button id="new-price" class="ghost" type="button" hidden>Get new price</button></div>
+      </div>
+      <div id="s-consent" hidden>
+        <div class="consent">
+          <p class="who" style="color:var(--violet)">Provider A · consent screen (simulated)</p>
+          <h2>Approve this payment?</h2>
+          <p class="muted">Tawid Checkout asks to send <b id="c-debit"></b> from your account, one time, to Liza. It cannot take any other amount.</p>
+          <div class="btnrow"><button id="approve" type="button">Approve</button><button id="decline" class="warn" type="button">Decline</button></div>
+        </div>
+      </div>
+      <div id="s-result" hidden>
+        <div class="panel result" id="result-box" style="margin:0">
+          <h2 id="r-title"></h2>
+          <p id="r-text" class="muted"></p>
+          <dl class="kv" id="r-kv"></dl>
+          <dl class="fail" id="r-fail" hidden>
+            <dt>What happened</dt><dd id="f-plain"></dd>
+            <dt>Who must act</dt><dd id="f-owner"></dd>
+            <dt>Where the money is</dt><dd id="f-money"></dd>
+          </dl>
+        </div>
+      </div>
+      <ul class="status" aria-label="Payment status">
+        <li class="pill" id="st-requested">1 Requested</li>
+        <li class="pill" id="st-authorised">2 Approved</li>
+        <li class="pill" id="st-created">3 Instruction created</li>
+        <li class="pill" id="st-completed">4 Sent</li>
+        <li class="pill" id="st-usable">5 Usable by Liza</li>
+      </ul>
+    </section>
+
+    <section class="panel" aria-live="polite">
+      <p class="who">Liza’s phone · freelancer · Provider B (Philippines)</p>
+      <h2 id="liza-title">No payment yet</h2>
+      <p class="muted" id="liza-text">Liza has shared her pay link. She needs no new app.</p>
+    </section>
+
+    <section class="panel" aria-live="polite">
+      <p class="who">Tracking record · one link for both sides</p>
+      <p class="muted">Reference <span class="mono" id="trk-ref">—</span>. Times are simulated.</p>
+      <ol class="track" id="track"></ol>
+    </section>
+
+    <section class="panel" aria-live="polite">
+      <p class="who">Balances in the mocked providers</p>
+      <dl class="kv">
+        <dt>Sam at Provider A</dt><dd id="bal-sam"></dd>
+        <dt>Liza at Provider B</dt><dd id="bal-liza"></dd>
+        <dt>Provider B pesos ready to pay out</dt><dd id="bal-pool"></dd>
+      </dl>
+    </section>
+
+    <section class="panel">
+      <h2>What this page does and does not show</h2>
+      <ul class="notes muted">
+        <li><b>Works here:</b> the check before paying, the order of Open Payments calls, consent, a hash check on the approval, price expiry, single use of a price, the shared tracking record and the failure dictionary.</li>
+        <li><b>Simulated:</b> both providers, their authorisation and resource servers, the Interledger packets, the exchange rate and all balances. They run inside this page.</li>
+        <li><b>Separate script, not this page:</b> the same flow written with the official Open Payments SDK and signed requests. It has been dry-run against a local stand-in only.</li>
+        <li><b>Not done:</b> a payment on the Interledger test network, real providers, ID checks, settlement between providers, and partly delivered payments.</li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="panel" aria-label="Message log">
+    <h2>Under the hood</h2>
+    <p class="muted">Every call the client makes, in order. Open one to see the request and the reply. <span class="tag auth">AUTH</span> grant calls · <span class="tag op">OPEN PAYMENTS</span> resource calls · <span class="tag ilp">ILP</span> simulated packets</p>
+    <p class="empty" id="log-empty">Nothing yet. Press “Check and get price”.</p>
+    <ol class="log" id="log"></ol>
+  </section>
+</main>
+<section class="wide">
+  <div class="panel">
+    <h2>Failure dictionary</h2>
+    <p class="muted">Every way this payment can fail maps to one plain answer. The row that fired is highlighted.</p>
+    <div class="scroll"><table class="dict"><thead><tr><th>Signal from the standard</th><th>What the person is told</th><th>Who must act</th><th>Where the money is</th></tr></thead><tbody id="dict"></tbody></table></div>
+  </div>
+</section>
+
+<script>
+/* ============================================================
+   Tawid Checkout — simulated proof of concept.
+   Three parts, kept separate on purpose:
+     1. MockProvider  — a made-up account servicing entity with an
+        authorisation server and a resource server (Open Payments shapes).
+     2. Interledger   — simulated PREPARE / FULFILL / REJECT packets.
+     3. CheckoutClient — the part a real build would keep: it only talks
+        to providers through net.request(), like HTTP.
+   Nothing here contacts a real service.
+   ============================================================ */
+const REFERENCE_RATE = 43.5;        // AUD -> PHP, assumed mid-market rate
+const FEE_BPS = 200;                // 2% all-in price target, included in the quote
+const MAX_PACKET = 500;             // largest simulated ILP packet, in AUD cents
+const LATENCY = 120;                // ms, so the log is readable
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const enc = new TextEncoder();
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const rid = (n = 8) => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
+const sha256 = async data => crypto.subtle.digest('SHA-256', typeof data === 'string' ? enc.encode(data) : data);
+async function hmac(secretB64, msg) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secretB64), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return crypto.subtle.sign('HMAC', key, enc.encode(msg));
+}
+const money = a => `${a.assetCode} ${(Number(a.value) / 10 ** a.assetScale).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const amt = (value, assetCode) => ({ value: String(value), assetCode, assetScale: 2 });
+
+/* ---------- 1. Mock provider (account servicing entity) ---------- */
+class MockProvider {
+  constructor({ label, host, assetCode, ilpPrefix, accounts, payoutPool }) {
+    Object.assign(this, { label, host, assetCode, ilpPrefix, accounts, payoutPool });
+    this.tokens = new Map(); this.grants = new Map();
+    this.incoming = new Map(); this.quotes = new Map(); this.outgoing = new Map();
+    this.quoteTtlMs = 60000;
+  }
+  get resourceServer() { return `https://${this.host}`; }
+  get authServer() { return `https://auth.${this.host}`; }
+  issueToken(access) { const value = 'tok_' + rid(12); this.tokens.set(value, access); return value; }
+  allowed(token, type, action) {
+    const access = this.tokens.get(token);
+    return access && access.find(a => a.type === type && a.actions.includes(action));
+  }
+  async handle(method, url, body, token) {
+    const u = new URL(url); const path = u.pathname.replace(/\/$/, '');
+    if (u.host === `auth.${this.host}`) return this.handleAuth(method, path, body, token);
+    const seg = path.split('/').filter(Boolean);
+    if (method === 'GET' && seg.length === 1 && this.accounts[seg[0]]) {
+      return [200, { id: `${this.resourceServer}/${seg[0]}`, publicName: this.accounts[seg[0]].name, assetCode: this.assetCode, assetScale: 2, authServer: this.authServer, resourceServer: this.resourceServer }];
+    }
+    if (seg[0] === 'incoming-payments') return this.handleIncoming(method, seg, body, token);
+    if (seg[0] === 'quotes') return this.handleQuotes(method, seg, body, token);
+    if (seg[0] === 'outgoing-payments') return this.handleOutgoing(method, seg, body, token);
+    return [404, { error: 'not_found' }];
+  }
+  /* Authorisation server: grants in the style of GNAP, as Open Payments uses. */
+  async handleAuth(method, path, body, token) {
+    if (method === 'POST' && path === '') {
+      const access = body.access_token.access;
+      const needsConsent = access.some(a => a.type === 'outgoing-payment');
+      if (!needsConsent) return [200, { access_token: { value: this.issueToken(access), manage: `${this.authServer}/token/${rid(4)}`, expires_in: 600, access } }];
+      if (!body.interact || !body.interact.finish) return [400, { error: 'invalid_request', description: 'outgoing-payment grants must be interactive' }];
+      const id = rid(6); const continueToken = 'cont_' + rid(10); const serverNonce = rid(8);
+      this.grants.set(id, { access, continueToken, serverNonce, clientNonce: body.interact.finish.nonce, state: 'pending', interactRef: null });
+      return [200, { interact: { redirect: `${this.authServer}/interact/${id}`, finish: serverNonce }, continue: { access_token: { value: continueToken }, uri: `${this.authServer}/continue/${id}`, wait: 0 } }];
+    }
+    const m = path.match(/^\/continue\/(\w+)$/);
+    if (method === 'POST' && m) {
+      const g = this.grants.get(m[1]);
+      if (!g || g.continueToken !== token) return [401, { error: 'invalid_continuation' }];
+      if (g.state === 'denied') return [403, { error: 'user_denied', description: 'The account holder declined the request' }];
+      if (g.state !== 'approved' || body.interact_ref !== g.interactRef) return [400, { error: 'invalid_interaction' }];
+      g.state = 'finalised';
+      return [200, { access_token: { value: this.issueToken(g.access), manage: `${this.authServer}/token/${rid(4)}`, expires_in: 600, access: g.access } }];
+    }
+    return [404, { error: 'not_found' }];
+  }
+  /* What the provider's own consent screen does when the account holder decides. */
+  decide(redirectUrl, approved) {
+    const g = this.grants.get(redirectUrl.split('/').pop());
+    if (!g.decision) g.decision = (async () => {            // a decision is made once
+      if (!approved) { g.state = 'denied'; return { result: 'grant_rejected' }; }
+      g.interactRef = rid(8);
+      const hash = b64u(await sha256(`${g.clientNonce}\n${g.serverNonce}\n${g.interactRef}\n${this.authServer}/`));
+      g.state = 'approved';
+      return { interact_ref: g.interactRef, hash };
+    })();
+    return g.decision;
+  }
+  handleIncoming(method, seg, body, token) {
+    if (method === 'POST' && seg.length === 1) {
+      if (!this.allowed(token, 'incoming-payment', 'create')) return [403, { error: 'insufficient_grant' }];
+      const user = new URL(body.walletAddress).pathname.slice(1);
+      const id = `${this.resourceServer}/incoming-payments/${rid(8)}`;
+      const ip = { id, walletAddress: body.walletAddress, completed: false, receivedAmount: amt(0, this.assetCode), expiresAt: body.expiresAt, metadata: body.metadata, createdAt: new Date().toISOString(),
+        methods: [{ type: 'ilp', ilpAddress: `${this.ilpPrefix}.${user}.${rid(4)}`, sharedSecret: b64u(crypto.getRandomValues(new Uint8Array(32))) }] };
+      this.incoming.set(id, ip); return [201, ip];
+    }
+    const id = `${this.resourceServer}/incoming-payments/${seg[1]}`; const ip = this.incoming.get(id);
+    if (!ip) return [404, { error: 'not_found' }];
+    if (method === 'POST' && seg[2] === 'complete') {
+      if (!this.allowed(token, 'incoming-payment', 'complete')) return [403, { error: 'insufficient_grant' }];
+      ip.completed = true; const { methods, ...view } = ip; return [200, view];
+    }
+    if (method === 'GET') { const { methods, ...view } = ip; return [200, view]; }
+    return [405, { error: 'method_not_allowed' }];
+  }
+  handleQuotes(method, seg, body, token) {
+    if (method !== 'POST') return [405, { error: 'method_not_allowed' }];
+    if (!this.allowed(token, 'quote', 'create')) return [403, { error: 'insufficient_grant' }];
+    if (this.noRoute) return [400, { error: 'no_route', description: 'No route or rate to this receiver' }];
+    const debit = Number(body.debitAmount.value);
+    const fee = Math.round(debit * FEE_BPS / 10000);
+    const receive = Math.round((debit - fee) * REFERENCE_RATE);
+    const id = `${this.resourceServer}/quotes/${rid(8)}`;
+    const q = { id, walletAddress: body.walletAddress, receiver: body.receiver, method: 'ilp', debitAmount: body.debitAmount, receiveAmount: amt(receive, 'PHP'), expiresAt: new Date(Date.now() + this.quoteTtlMs).toISOString(), createdAt: new Date().toISOString() };
+    this.quotes.set(id, { ...q, used: false, sendCents: debit - fee }); return [201, q];
+  }
+  handleOutgoing(method, seg, body, token) {
+    if (method === 'GET' && seg.length === 2) {
+      const op = this.outgoing.get(`${this.resourceServer}/outgoing-payments/${seg[1]}`);
+      return op ? [200, op] : [404, { error: 'not_found' }];
+    }
+    if (method !== 'POST') return [405, { error: 'method_not_allowed' }];
+    const grant = this.allowed(token, 'outgoing-payment', 'create');
+    if (!grant) return [403, { error: 'insufficient_grant' }];
+    const q = this.quotes.get(body.quoteId);
+    if (!q) return [400, { error: 'invalid_quote' }];
+    if (q.used) return [409, { error: 'quote_already_used', description: 'A quote can fund one outgoing payment only' }];
+    if (Date.now() > Date.parse(q.expiresAt)) return [400, { error: 'quote_expired' }];
+    if (Number(q.debitAmount.value) > Number(grant.limits.debitAmount.value) || q.receiver !== grant.limits.receiver) return [403, { error: 'outside_grant_limits' }];
+    const user = new URL(body.walletAddress).pathname.slice(1); const account = this.accounts[user];
+    if (account.balance < Number(q.debitAmount.value)) return [403, { error: 'insufficient_funds' }];
+    q.used = true; account.balance -= Number(q.debitAmount.value); account.reserved = Number(q.debitAmount.value);
+    const id = `${this.resourceServer}/outgoing-payments/${rid(8)}`;
+    const op = { id, walletAddress: body.walletAddress, quoteId: q.id, receiver: q.receiver, debitAmount: q.debitAmount, receiveAmount: q.receiveAmount, sentAmount: amt(0, this.assetCode), failed: false, metadata: body.metadata, createdAt: new Date().toISOString() };
+    this.outgoing.set(id, op);
+    sendOverInterledger(this, op, q, account);   // runs in the background, like a real provider
+    return [201, op];
+  }
+}
+
+/* ---------- 2. Simulated Interledger ---------- */
+/* Each packet carries a condition. The receiver can only produce the matching
+   fulfillment if it knows the shared secret from the incoming payment. This copies
+   the idea behind ILP and STREAM; it is not the real wire format. */
+async function sendOverInterledger(sender, op, quote, account) {
+  const receiver = world.providerB; const ip = receiver.incoming.get(op.receiver);
+  const { ilpAddress, sharedSecret } = ip.methods[0];
+  let left = quote.sendCents, seq = 0, delivered = 0, failure = null;
+  while (left > 0) {
+    const part = Math.min(left, MAX_PACKET); seq += 1;
+    const fulfillmentWanted = await hmac(sharedSecret, `packet:${seq}`);
+    const prepare = { type: 'PREPARE', destination: ilpAddress, amount: String(part), asset: 'AUD', executionCondition: b64u(await sha256(fulfillmentWanted)), expiresAt: new Date(Date.now() + 30000).toISOString() };
+    await sleep(LATENCY);
+    const reply = await receiver.onPacket(prepare, seq, Math.round(part * REFERENCE_RATE));
+    if (reply.type === 'FULFILL') {
+      const ok = b64u(await sha256(Uint8Array.from(atob(reply.fulfillment.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)))) === prepare.executionCondition;
+      ui.logPacket(prepare, reply, ok ? 'fulfillment matches the condition' : 'fulfillment does NOT match');
+      if (!ok) { failure = 'bad_fulfillment'; break; }
+      left -= part; delivered += Math.round(part * REFERENCE_RATE);
+    } else { ui.logPacket(prepare, reply, 'packet rejected'); failure = reply.code + ' ' + reply.message; break; }
+  }
+  if (failure) {
+    op.failed = true; op.error = failure;
+    account.balance += account.reserved; account.reserved = 0;      // nothing was delivered: release the full amount
+  } else {
+    op.sentAmount = op.debitAmount; account.reserved = 0;
+  }
+  ui.balances();
+}
+MockProvider.prototype.onPacket = async function (prepare, seq, payoutCentavos) {
+  const ip = [...this.incoming.values()].find(i => i.methods[0].ilpAddress === prepare.destination);
+  if (!ip || ip.completed) return { type: 'REJECT', code: 'F02', message: 'Unreachable', triggeredBy: this.ilpPrefix };
+  if (this.payoutPool < payoutCentavos) return { type: 'REJECT', code: 'T04', message: 'Insufficient Liquidity', triggeredBy: this.ilpPrefix };
+  if (this.shortPay) payoutCentavos -= 100;                 // fault: pays out PHP 1.00 less per packet
+  this.payoutPool -= payoutCentavos;
+  ip.receivedAmount = amt(Number(ip.receivedAmount.value) + payoutCentavos, this.assetCode);
+  const user = new URL(ip.walletAddress).pathname.slice(1); this.accounts[user].balance += payoutCentavos;
+  return { type: 'FULFILL', fulfillment: b64u(await hmac(ip.methods[0].sharedSecret, `packet:${seq}`)) };
+};
+
+/* ---------- The mocked network between client and providers ---------- */
+const net = {
+  async request(method, url, { body, token, kind } = {}) {
+    const host = new URL(url).host.replace(/^auth\./, '');
+    const provider = Object.values(world).find(p => p.host === host);
+    await sleep(LATENCY);
+    if (!provider) {
+      const reply = { error: 'not_found', description: 'No Open Payments server answers at this address' };
+      ui.logCall({ method, url, body, token, status: 404, reply, kind: kind || 'op', to: host });
+      return { status: 404, body: reply, ok: false };
+    }
+    const [status, reply] = await provider.handle(method, url, body, token);
+    ui.logCall({ method, url, body, token, status, reply, kind: kind || (url.includes('//auth.') ? 'auth' : 'op'), to: provider.label });
+    return { status, body: reply, ok: status < 300 };
+  }
+};
+
+/* ---------- 3. Tawid client: CHECK -> PAY -> TRACK ---------- */
+/* One shared vocabulary for failure. The same table is used in the test-network script. */
+const FAILURES = {
+  wallet_not_found:      { signal: 'GET wallet address returns 404', plain: 'That wallet address does not exist, or its provider does not support Open Payments.', owner: 'The person who gave the address', money: 'No money moved.' },
+  no_route:              { signal: 'POST /quotes is refused', plain: 'Sam’s provider could not give a price for paying Liza. There is no route or no exchange rate.', owner: 'Provider A', money: 'No money moved.' },
+  quote_expired:         { signal: 'Quote is past expiresAt', plain: 'The price expired before the payment was created.', owner: 'The checkout: get a new price', money: 'No money moved.' },
+  consent_declined:      { signal: 'Grant continuation is denied', plain: 'Sam did not approve the payment.', owner: 'Nobody. Sam chose this.', money: 'No money moved.' },
+  approval_not_verified: { signal: 'Interaction hash does not match', plain: 'The approval reply could not be verified, so it was not used.', owner: 'Provider A', money: 'No money moved.' },
+  insufficient_funds:    { signal: 'POST /outgoing-payments returns 403', plain: 'There is not enough money in the paying account.', owner: 'Sam', money: 'No money moved.' },
+  price_already_used:    { signal: 'POST /outgoing-payments returns 409', plain: 'This price was already used for a payment. No second payment was made.', owner: 'Nobody. The first payment stands.', money: 'Only the first payment moved.' },
+  delivery_failed:       { signal: 'Outgoing payment has failed = true (ILP reject)', plain: 'Provider A could not deliver the money to Provider B.', owner: 'Provider A refunds Sam. Provider B must fix the cause.', money: 'Nothing was delivered. The full amount is back with Sam.' },
+  amount_mismatch:       { signal: 'receivedAmount differs from the quote', plain: 'Liza received a different amount from the price Sam was shown.', owner: 'Provider A must explain or return the difference', money: 'Delivered, but not the amount shown.' },
+  unknown:               { signal: 'Any other error', plain: 'The payment could not be completed.', owner: 'The provider that returned the error', money: 'See the tracking record.' }
+};
+class TawidFailure extends Error { constructor(code, detail) { super(code); this.code = code; this.detail = detail; } }
+const SERVER_CODES = { quote_expired: 'quote_expired', quote_already_used: 'price_already_used', insufficient_funds: 'insufficient_funds', no_route: 'no_route', not_found: 'wallet_not_found' };
+
+const CLIENT = 'https://tawid.example/checkout';   // the client's own wallet address; real requests would be signed with its key
+class CheckoutClient {
+  constructor() { this.busy = false; this.t0 = null; this.record = []; this.paymentRef = null; }
+  mark(state, note, bad) { if (this.t0 === null) this.t0 = performance.now(); this.record.push({ state, note, bad, ms: Math.round(performance.now() - this.t0) }); ui.track(); }
+  async grant(authServer, access, interact) {
+    return net.request('POST', authServer + '/', { body: { access_token: { access }, client: CLIENT, ...(interact ? { interact } : {}) } });
+  }
+  /* CHECK: can it get through, and at what price? Uses only calls that need no consent. */
+  async check(payerUrl, receiverUrl, cents) {
+    this.paymentRef = 'tawid_' + rid(6); this.mark('Check started');
+    ui.phase('CHECK · find both accounts');
+    const recv = await net.request('GET', receiverUrl); if (!recv.ok) throw new TawidFailure('wallet_not_found');
+    const payer = await net.request('GET', payerUrl); if (!payer.ok) throw new TawidFailure('wallet_not_found');
+    this.recv = recv.body; this.payer = payer.body; this.mark('Both accounts found', `${this.payer.assetCode} to ${this.recv.assetCode}`);
+    ui.phase('CHECK · prepare the receiving side');
+    const g1 = await this.grant(this.recv.authServer, [{ type: 'incoming-payment', actions: ['create', 'read', 'complete'] }]);
+    this.recvToken = g1.body.access_token.value;
+    const ip = await net.request('POST', this.recv.resourceServer + '/incoming-payments', { token: this.recvToken, body: { walletAddress: this.recv.id, expiresAt: new Date(Date.now() + 600000).toISOString(), metadata: { description: 'Menu design', tawidReference: this.paymentRef } } });
+    if (!ip.ok) throw new TawidFailure('no_route');
+    this.incoming = ip.body; ui.status('requested'); this.mark('Requested', 'Provider B is ready to receive');
+    return this.price(cents);
+  }
+  async price(cents) {
+    ui.phase('CHECK · fix the price');
+    const g2 = await this.grant(this.payer.authServer, [{ type: 'quote', actions: ['create', 'read'] }]);
+    const q = await net.request('POST', this.payer.resourceServer + '/quotes', { token: g2.body.access_token.value, body: { walletAddress: this.payer.id, receiver: this.incoming.id, method: 'ilp', debitAmount: amt(cents, this.payer.assetCode) } });
+    if (!q.ok) throw new TawidFailure(SERVER_CODES[q.body.error] || 'no_route');
+    this.quote = q.body; this.mark('Price fixed', `${money(q.body.debitAmount)} to ${money(q.body.receiveAmount)}`); return this.quote;
+  }
+  /* PAY: Sam approves at his own provider. */
+  async askConsent() {
+    ui.phase('PAY · ask Sam to approve at Provider A');
+    this.nonce = rid(8);
+    const g = await this.grant(this.payer.authServer, [{ type: 'outgoing-payment', actions: ['create', 'read'], identifier: this.payer.id, limits: { debitAmount: this.quote.debitAmount, receiver: this.incoming.id } }],
+      { start: ['redirect'], finish: { method: 'redirect', uri: CLIENT + '/done', nonce: this.nonce } });
+    this.pending = g.body; return g.body.interact.redirect;
+  }
+  async finish(decision) {
+    if (this.busy) return null;          // a second click does nothing
+    this.busy = true;
+    try { return await this.payAndTrack(decision); }
+    catch (e) { const code = e instanceof TawidFailure ? e.code : 'unknown'; this.mark('Could not get through', FAILURES[code].plain, true); return { outcome: 'failed', code }; }
+    finally { this.busy = false; }
+  }
+  async payAndTrack(decision) {
+    if (decision.interact_ref) {
+      const expected = b64u(await sha256(`${this.nonce}\n${this.pending.interact.finish}\n${decision.interact_ref}\n${this.payer.authServer}/`));
+      if (expected !== decision.hash) throw new TawidFailure('approval_not_verified');
+    }
+    ui.phase('PAY · collect the approval');
+    const cont = await net.request('POST', this.pending.continue.uri, { token: this.pending.continue.access_token.value, body: { interact_ref: decision.interact_ref || null } });
+    if (!cont.ok) throw new TawidFailure('consent_declined');
+    ui.status('authorised'); this.mark('Approved', 'Sam approved at Provider A');
+    ui.phase('PAY · create the payment instruction');
+    const created = await net.request('POST', this.payer.resourceServer + '/outgoing-payments', { token: cont.body.access_token.value, body: { walletAddress: this.payer.id, quoteId: this.quote.id, metadata: { tawidReference: this.paymentRef } } });
+    if (!created.ok) throw new TawidFailure(SERVER_CODES[created.body.error] || 'unknown');
+    ui.status('created'); ui.balances(); this.mark('Instruction created', 'Provider A accepted the instruction');
+    /* TRACK: follow the money until Liza can use it. */
+    ui.stage('track'); ui.phase('TRACK · value moves between providers');
+    let op = created.body;
+    for (let i = 0; i < 100 && !op.failed && op.sentAmount.value !== op.debitAmount.value; i++) { await sleep(200); op = this.peek(op.id); }
+    const check = await net.request('GET', op.id, { token: cont.body.access_token.value });
+    if (check.body.failed) throw new TawidFailure('delivery_failed', check.body.error);
+    ui.status('completed'); this.mark('Sent', `Provider A reports ${money(check.body.sentAmount)} sent`);
+    ui.phase('TRACK · confirm with the receiving side');
+    await net.request('POST', this.incoming.id + '/complete', { token: this.recvToken });
+    const got = await net.request('GET', this.incoming.id, { token: this.recvToken });
+    this.received = got.body.receivedAmount;
+    if (got.body.receivedAmount.value !== this.quote.receiveAmount.value) throw new TawidFailure('amount_mismatch');
+    ui.status('usable'); this.mark('Usable by Liza', `Provider B reports ${money(got.body.receivedAmount)} received`);
+    return { outcome: 'paid', op: check.body, incoming: got.body };
+  }
+  peek(id) { return world.providerA.outgoing.get(id); }   // stands in for polling GET /outgoing-payments/{id}
+}
+
+/* ---------- Page wiring ---------- */
+const $ = id => document.getElementById(id);
+let world, client, quoteTimer, redirectUrl;
+const ui = {
+  n: 0,
+  show(id) { ['s-invoice', 's-quote', 's-consent', 's-result'].forEach(s => $(s).hidden = s !== id); },
+  status(name) { $('st-' + name).classList.add('on'); },
+  stage(now) { const order = ['check', 'pay', 'track']; order.forEach((s, i) => { const el = $('stp-' + s); el.className = i < order.indexOf(now) ? 'done' : i === order.indexOf(now) ? 'now' : ''; }); },
+  track() {
+    $('trk-ref').textContent = client.paymentRef || '—';
+    $('track').innerHTML = client.record.map(r => `<li class="${r.bad ? 'bad' : ''}"><span class="ms">+${r.ms} ms</span><span><b>${this.esc(r.state)}</b>${r.note ? ' · ' + this.esc(r.note) : ''}</span></li>`).join('');
+  },
+  liza(title, text) { $('liza-title').textContent = title; $('liza-text').textContent = text; },
+  dict(hit) { $('dict').innerHTML = Object.entries(FAILURES).map(([code, f]) => `<tr class="${code === hit ? 'hit' : ''}" data-code="${code}"><td class="mono">${this.esc(f.signal)}</td><td>${this.esc(f.plain)}</td><td>${this.esc(f.owner)}</td><td>${this.esc(f.money)}</td></tr>`).join(''); },
+  balances() {
+    $('bal-sam').textContent = money(amt(world.providerA.accounts.sam.balance, 'AUD'));
+    $('bal-liza').textContent = money(amt(world.providerB.accounts.liza.balance, 'PHP'));
+    $('bal-pool').textContent = money(amt(world.providerB.payoutPool, 'PHP'));
+  },
+  add(html, cls) { $('log-empty').hidden = true; const li = document.createElement('li'); if (cls) li.className = cls; li.innerHTML = html; $('log').appendChild(li); },
+  phase(text) { this.add(text, 'phase'); },
+  esc: s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])),
+  logCall({ method, url, body, token, status, reply, kind, to }) {
+    this.n += 1; const u = new URL(url); const bad = status >= 400;
+    const shown = { request: { method, url, headers: { Authorization: token ? 'GNAP ' + token : undefined, Signature: 'not implemented in this simulation' }, body }, response: { status, body: reply } };
+    this.add(`<details><summary><span>${this.n}.</span><span class="tag ${kind}">${kind === 'auth' ? 'AUTH' : 'OPEN PAYMENTS'}</span><span>Client → ${this.esc(to)}</span><span class="mono">${method} ${this.esc(u.pathname === '/' ? '/ (grant request)' : u.pathname)}</span><span class="tag ${bad ? 'err' : 'op'}">${status}${bad ? ' ' + this.esc(reply.error) : ''}</span></summary><pre>${this.esc(JSON.stringify(shown, null, 2))}</pre></details>`);
+  },
+  logPacket(prepare, reply, note) {
+    this.n += 1; const bad = reply.type !== 'FULFILL';
+    this.add(`<details><summary><span>${this.n}.</span><span class="tag ilp">ILP</span><span>Provider A → Provider B</span><span class="mono">PREPARE AUD ${(prepare.amount / 100).toFixed(2)}</span><span class="tag ${bad ? 'err' : 'ilp'}">${reply.type}${bad ? ' ' + reply.code : ''}</span><span class="muted">${note}</span></summary><pre>${this.esc(JSON.stringify({ prepare, reply }, null, 2))}</pre></details>`);
+  }
+};
+function cents() { const c = Math.round(Number($('amount').value) * 100); return Math.min(10000, Math.max(100, c || 2000)); }
+function reset() {
+  clearInterval(quoteTimer);
+  const fault = $('fault').value;
+  world = {
+    providerA: new MockProvider({ label: 'Provider A', host: 'provider-a.example', assetCode: 'AUD', ilpPrefix: 'test.au.provider-a', accounts: { sam: { name: 'Sam', balance: fault === 'funds' ? 500 : 25000, reserved: 0 } }, payoutPool: 0 }),
+    providerB: new MockProvider({ label: 'Provider B', host: 'provider-b.example', assetCode: 'PHP', ilpPrefix: 'test.ph.provider-b', accounts: { liza: { name: 'Liza', balance: 0 } }, payoutPool: fault === 'liquidity' ? 0 : 5000000 })
+  };
+  if (fault === 'expiry') world.providerA.quoteTtlMs = 3000;
+  if (fault === 'noroute') world.providerA.noRoute = true;
+  if (fault === 'shortpay') world.providerB.shortPay = true;
+  $('payer').value = fault === 'unsupported' ? 'https://old-bank.example/sam' : 'https://provider-a.example/sam';
+  client = new CheckoutClient(); ui.n = 0;
+  $('log').innerHTML = ''; $('log-empty').hidden = false;
+  document.querySelectorAll('.status .pill').forEach(p => p.classList.remove('on'));
+  $('inv-amount').textContent = money(amt(cents(), 'AUD'));
+  ['get-price', 'go-approve', 'approve', 'decline'].forEach(b => $(b).disabled = false); $('new-price').hidden = true;
+  ui.show('s-invoice'); ui.stage('check'); ui.balances(); ui.track(); ui.dict(null);
+  ui.liza('No payment yet', 'Liza has shared her pay link. She needs no new app.');
+}
+function showQuote(q) {
+  $('q-debit').textContent = money(q.debitAmount); $('q-receive').textContent = money(q.receiveAmount);
+  const cost = 1 - Number(q.receiveAmount.value) / (Number(q.debitAmount.value) * REFERENCE_RATE);
+  $('q-cost').textContent = (cost * 100).toFixed(1) + '% (' + money(amt(Math.round(Number(q.debitAmount.value) * cost), 'AUD')) + ')';
+  $('go-approve').disabled = false; $('new-price').hidden = true; ui.show('s-quote');
+  ui.liza('A customer is checking out', `Sam has been shown a price. If he pays, you will get ${money(q.receiveAmount)}.`);
+  clearInterval(quoteTimer);
+  const tick = () => {
+    const left = Math.ceil((Date.parse(q.expiresAt) - Date.now()) / 1000);
+    if (left <= 0) { clearInterval(quoteTimer); $('q-ttl').textContent = 'expired'; $('go-approve').disabled = true; $('new-price').hidden = false; }
+    else $('q-ttl').textContent = left + ' seconds';
+  };
+  tick(); quoteTimer = setInterval(tick, 250);
+}
+function showResult(r) {
+  const box = $('result-box'); box.className = 'panel result ' + (r.outcome === 'paid' ? 'ok' : 'bad');
+  const rows = []; $('r-fail').hidden = true; clearInterval(quoteTimer);
+  if (r.outcome === 'paid') {
+    ui.stage('track');
+    $('r-title').textContent = 'Paid'; $('r-text').textContent = 'Liza received the amount shown in the price. Both sides hold the same tracking record.';
+    rows.push(['You paid', money(r.op.debitAmount)], ['Liza received', money(r.incoming.receivedAmount)], ['Reference', client.paymentRef]);
+    ui.liza(`${money(r.incoming.receivedAmount)} received`, 'From Sam, for “Menu design”. You can use this money now.');
+  } else {
+    const f = FAILURES[r.code] || FAILURES.unknown;
+    $('r-title').textContent = r.code === 'consent_declined' ? 'Not approved' : 'Could not get through'; $('r-text').textContent = '';
+    $('f-plain').textContent = f.plain; $('f-owner').textContent = f.owner; $('f-money').textContent = f.money; $('r-fail').hidden = false;
+    if (client.paymentRef) rows.push(['Reference', client.paymentRef]);
+    ui.dict(r.code);
+    if (r.code === 'amount_mismatch') ui.liza(`${money(client.received)} received`, 'This is less than the price Sam was shown. Provider A must explain or return the difference. You do not need to do anything.');
+    else ui.liza('No payment arrived', 'A customer tried to pay but it did not go through. You do not need to do anything.');
+  }
+  $('r-kv').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${ui.esc(v)}</dd>`).join('');
+  ui.show('s-result'); ui.balances();
+}
+function failCheck(e) {
+  const code = e instanceof TawidFailure ? e.code : 'unknown';
+  client.mark('Could not get through', FAILURES[code].plain, true); showResult({ outcome: 'failed', code });
+}
+$('get-price').onclick = async () => {
+  $('get-price').disabled = true;
+  try { showQuote(await client.check($('payer').value.trim(), 'https://provider-b.example/liza', cents())); } catch (e) { failCheck(e); }
+};
+$('new-price').onclick = async () => { $('new-price').hidden = true; try { showQuote(await client.price(cents())); } catch (e) { failCheck(e); } };
+$('go-approve').onclick = async () => {
+  $('go-approve').disabled = true; clearInterval(quoteTimer); ui.stage('pay');
+  redirectUrl = await client.askConsent(); $('c-debit').textContent = money(client.quote.debitAmount); ui.show('s-consent');
+};
+async function decide(approved) {
+  $('approve').disabled = true; $('decline').disabled = true;
+  const decision = await world.providerA.decide(redirectUrl, approved);
+  const result = await client.finish(decision);
+  if (result) showResult(result);
+}
+$('approve').onclick = () => decide(true);
+$('decline').onclick = () => decide(false);
+$('reset').onclick = reset; $('fault').onchange = reset; $('amount').onchange = reset;
+reset();
+</script>
+</body>
+</html>
